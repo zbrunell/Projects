@@ -1,0 +1,324 @@
+---
+title: "PROJECT 2"
+author: "Zachary Brunell"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc_float: true
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.height=5, fig.width=7, warning=FALSE, tidy=TRUE, tidy.opts=list(width.cutoff=60), message=FALSE)
+```
+
+![ESPN.com, 2017](lebronpic.jpeg){width="1000px"}
+
+# Introduction
+
+My project aims to investigate the evolution of the NBA, and what it takes to be the best of the best.
+The data was retreived from [Kaggle Set 1](https://www.kaggle.com/datasets/nickalden/nba-top-scorers-stats-and-shot-details-2000-2024?resource=download), [Kaggle Set 2](https://www.kaggle.com/datasets/robertsunderhaft/nba-player-season-statistics-with-mvp-win-share) , and [Basketball Reference](https://www.basketball-reference.com/awards/mvp.html).
+I have always maintained an obsession with the NBA, and I wished to discover the correlation between various statistics, such as being the best scorer and winning the MVP.
+I will investigate several statistics, such as field goal percentage, three pointers made, and the chance of a top ten scorer being the MVP.
+(All graphs in this markdown are only using data from 2000-2022, and the data is only that of players that were in the top ten list for scoring for each season.)
+
+# Data Preparation
+
+First, I downloaded two data sets from Kaggle using a zip file.
+The data sets contained data from different season ranges, 1982-2022 for one, and 2000-2024 for the other, so I simply removed all data outside of the range of 2000-2022.
+I then renamed the columns storing the name of the players to be the same, as I could then merge the data sets using their name as the key.
+There were no NAs in the data set to be removed.
+An issue with the data is that one set had averages, while the other had averages and totals.
+To resolve this, I removed all repetitive columns to clean the merged data set.
+Then, I scraped MVP data from Basketball Reference using code, and created a new column in the data set to store the values of the MVP data.
+
+# Variable Descriptions
+
+```{r echo=FALSE, results=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse) 
+library(dplyr)      
+library(rvest)      
+library(ggplot2) 
+library(knitr)
+# Create the tibble
+variable_description <- tibble(
+  Variable = c("PLAYER", "MVP", "PPG", "FG_PCT", "FG3_PCT", "FT_PCT", "RANK", "TEAM"),
+  Type = c("String", "Factor", "Numeric", "Numeric", "Numeric", "Numeric", "Numeric", "String"),
+  Description = c(
+    "Player's name", 
+    "Whether the player won MVP (YES/NO)", 
+    "Points per game (PPG) for the player", 
+    "Field goal percentage (FG%)", 
+    "Three-point field goal percentage (FG3%)", 
+    "Free throw percentage (FT%)", 
+    "Player's rank (1 = best, 10 = worst)", 
+    "Team name of the player"
+  )
+)
+
+# Print the table using kable for Markdown
+kable(variable_description, format = "markdown", col.names = c("Variable", "Type", "Description"), 
+      caption = "Variable Descriptions", align = "c")
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+
+
+NBA_DATA = read_csv("NBA_Dataset.csv")  
+leaders = read_csv("leaders.csv")       
+
+# Data preparation: Filter data for seasons between 2000-2022
+
+# Remove data for seasons before 2000
+NBA_DATA = NBA_DATA[NBA_DATA$season >= 2000, ]
+
+# Adjust player names to match later join operation
+NBA_DATA$PLAYER = NBA_DATA$player
+
+# Remove data for seasons after 2022
+leaders = leaders[leaders$season <= 2022, ]
+
+# Merging datasets: Combine the data based on the "PLAYER" column
+NBA_LEADERS = inner_join(NBA_DATA, leaders, by = "PLAYER")
+
+# Remove unnecessary columns (1 to 55 in the dataframe)
+NBA_LEADERS <- NBA_LEADERS[, -c(1:55)] 
+
+# Remove duplicate entries based on PLAYER and season.y
+NBA_LEADERS <- distinct(NBA_LEADERS, PLAYER, season.y, .keep_all = TRUE)
+
+# Creating a new variable "GOOD_SHOOTER" based on shooting performance (FG%, 3P%, FT%)
+NBA_LEADERS$GOOD_SHOOTER <- ifelse(NBA_LEADERS$FG_PCT >= 0.5 & NBA_LEADERS$FG3_PCT >= 0.4 & NBA_LEADERS$FT_PCT >= 0.9, "YES", "NO")
+
+# Count the number of players with good shooting stats
+good_shooters_count <- nrow(NBA_LEADERS[NBA_LEADERS$GOOD_SHOOTER == 'YES', ])
+
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+# Web scraping MVP data from Basketball Reference (check the website for the latest data)
+mvps <- "https://www.basketball-reference.com/awards/mvp.html"  # URL for MVP data
+mvppage <- read_html(mvps)  # Read the webpage
+mvp_table <- html_table(html_nodes(mvppage, "table"))[[1]]  # Extract the first table
+
+# Clean up the table: Remove headers and select relevant columns
+colnames(mvp_table) <- mvp_table[1, ]  # Set column names from the first row
+mvp_table <- mvp_table[-1, ]  # Remove the header row
+mvp_table <- mvp_table[, c("Season", "Player")]  # Keep only relevant columns
+mvp_table <- mvp_table[mvp_table$Season >= 2000 & mvp_table$Season <= 2022, ]  # Filter for seasons between 2000-2022
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+# Initialize the MVP column with "NO" for all players in the NBA_LEADERS dataset
+NBA_LEADERS$MVP <- "NO"
+
+# Loop through the NBA_LEADERS dataset to match players with their MVP status
+for (i in 1:nrow(NBA_LEADERS)) {
+  current_player <- NBA_LEADERS$PLAYER[i]  # Current player's name
+  current_season <- NBA_LEADERS$season.y[i]  # Current season
+  
+  # Skip if player or season is missing
+  if (is.na(current_player) || is.na(current_season)) {
+    next
+  }
+  
+  # Check each player's record in the MVP data
+  for (j in 1:nrow(mvp_table)) {
+    if (is.na(mvp_table$Player[j]) || is.na(mvp_table$Season[j])) {
+      next
+    }
+    
+    # If player and season match, mark them as MVP
+    if (mvp_table$Player[j] == current_player && mvp_table$Season[j] == current_season) {
+      NBA_LEADERS$MVP[i] <- "YES"  # Assign MVP status to the player
+      break  # Exit inner loop once a match is found
+    }
+  }
+}
+
+# Calculate the chance of an MVP if they are a top ten scorer
+mvp_chance = nrow(NBA_LEADERS[NBA_LEADERS$MVP == 'YES', ]) / nrow(NBA_LEADERS)
+mvp_chance  # Return the MVP chance as a proportion
+```
+
+From 2000-2022, there were `r good_shooters_count` 50-40-90 seasons.
+The average amount of points required to be a top ten scorer in the NBA is `r round(mean(NBA_LEADERS$PTS), 0)`.
+The probability that a top ten scorer won MVP is `r round(mvp_chance,4) * 100`%.
+
+```{r echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+
+# Create a histogram to visualize the distribution of FG_PCT
+ggplot(NBA_LEADERS, aes(x = FG_PCT)) +
+  geom_histogram(bins = 20, fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Field Goal Percentage (FG%) ", x = "Field Goal Percentage", y = "Frequency") +
+  theme_minimal()
+
+# Create a histogram to visualize the distribution of Total Points
+ggplot(NBA_LEADERS, aes(x = PTS)) +
+  geom_histogram(bins = 20, fill = "orange", color = "black") +
+  labs(title = "Distribution of Total Points Per Season", x = "Points Per Season", y = "Frequency") +
+  theme_minimal()
+
+# Plot for 3-Point Field Goals Made (FG3M)
+ggplot(NBA_LEADERS, aes(x = FG3M)) +
+  geom_histogram(binwidth = 20, fill = "skyblue", color = 'white') +
+  labs(
+    title = "Histogram of Three-Point Field Goals Made (FG3M)",
+    x = "Three-Point Field Goals Made",
+    y = "Count (Density)"
+  ) +
+  theme_minimal()
+
+# Bar plot for the number of players per team
+ggplot(NBA_LEADERS, aes(x = TEAM)) +
+  geom_bar(fill = "#1D428A", color = "#FFC72C") +
+  labs(
+    title = "Number of Top Ten Scorers Per Team",
+    x = "Team",
+    y = "Count of Players"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+# Create a new variable for Points Per Game (PPG)
+NBA_LEADERS$PPG = round(NBA_LEADERS$PTS / NBA_LEADERS$GP, 1)
+
+# Calculate the average number of 3-point field goals made (FG3M) over time (seasons)
+FG3M_over_time <- aggregate(FG3M ~ season.y, data = NBA_LEADERS, FUN = mean, na.rm = TRUE)
+
+# Line plot showing the average number of 3-point field goals made over time
+ggplot(FG3M_over_time, aes(x = season.y, y = FG3M, group = 1)) +
+  geom_line(color = "blue", size = 1.2) +
+  geom_point(color = "red", size = 2) +
+  labs(
+    title = "Average Three-Point Field Goals Made Over Time",
+    x = "Season",
+    y = "Average FG3M"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 8, angle = 45, hjust = 1))  # Adjusting x-axis labels for readability
+# Convert season.y to numeric by extracting the year
+FG3M_over_time$season_numeric <- as.numeric(substr(FG3M_over_time$season.y, 1, 4))
+
+# Now, calculate the correlation with the numeric version of season.y
+correlation <- round(cor(FG3M_over_time$season_numeric, FG3M_over_time$FG3M), 2)
+
+# Display the correlation result
+correlation
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+# Calculate and visualize the relationship between MVP count and average PPG (Points Per Game)
+grouped_data <- group_by(NBA_LEADERS, PLAYER)
+
+# Summarize counts of "YES" in GOOD_SHOOTER and MVP, and calculate average PPG for each player
+mvp_counted <- summarise(
+  grouped_data,
+  MVPCount = sum(MVP == "YES"),  # Count how many times each player has been MVP
+  PPG = mean(PPG, na.rm = TRUE)  # Calculate the average PPG for each player
+)
+
+# Correlation between MVP count and average PPG
+cor(mvp_counted$PPG, mvp_counted$MVPCount)
+
+# Boxplot of PPG grouped by MVPCount
+ggplot(mvp_counted, aes(x = as.factor(MVPCount), y = PPG, fill = as.factor(MVPCount))) +
+  geom_boxplot() +  # Creates box plots
+  labs(
+    title = "Boxplot of PPG by MVP Count",
+    x = "MVP Count",
+    y = "Points Per Game (PPG)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for readability
+```
+
+```{r echo=FALSE, results=FALSE, message=FALSE, warning=FALSE}
+# Analyzing correlation between Field Goal Percentage (FG_PCT) and PPG
+ 
+```
+
+```{r results='hide'}
+# Assuming your merged dataset is called 'merged_data'
+write.csv(NBA_LEADERS, "NBA_LEADERS.csv", row.names = TRUE)
+```
+
+# Univariate Analyses
+
+The distribution of Field Goal Percentage (FG%) is shown in the above histogram.
+The data suggest that most players have a FG% between 40% and 50%.
+The mean FG% is `r round(mean(NBA_LEADERS$FG_PCT), 2)`, and the standard deviation is `r round(sd(NBA_LEADERS$FG_PCT), 2)`, which indicates the spread of the percentages around the mean.
+
+The PTS distribution can be found in the histogram above.
+The majority of players scored around between 1900 and 2100.
+The average PPG is `r round(mean(NBA_LEADERS$PTS), 0)`, and the standard deviation is `r round(sd(NBA_LEADERS$PTS), 0)`, indicating the spread of points per game across the players.
+
+The data reveals that the number of three-point shots made varies widely, with most players making between 30 and 200 three-pointers in a season.
+The mean FG3M is `r round(mean(NBA_LEADERS$FG3M), 0)`, and the standard deviation is `r round(sd(NBA_LEADERS$FG3M), 0)`.
+This is due to the style of basketball changing, which will be investigated later.
+
+The graph of top ten players per team can be found above.
+The max of the data is was 19, and the minimum was 1.
+The data is not obviously skewed, and reflects the notion that larger-market teams have better players.
+
+# Multivariate Analyses
+
+The scatter plot of field goal percentage (FG%) and points per game (PPG) can be seen above.
+As is evident by the plot and the moderate correlation (`r round(cor(NBA_LEADERS$FG_PCT, NBA_LEADERS$PPG), 2)`), there is only a slight correlation between higher points per game and higher efficiency.
+This is likely due to the fact that better scorers receive tough defense, and shoot the ball much more, resulting in worse efficiency.
+
+The box plot of player rank (1 to 10) and their MVP status demonstrates that MVP players tend to be ranked higher (closer to 1), indicating a strong relationship between high performance and MVP awards.
+The correlation between Player Rank and MVP Count is `r round(cor(rankvsmvp$AVGRank, rankvsmvp$MVPCount), 2)`, showing a low negative correlation.
+This is expected, as top-ranked players are more likely to win MVP.
+
+The line plot displays the average three-point field goals made (FG3M) has evolved over time (seasons).
+The increasing trend suggests a shift in playing style with an emphasis on three-point shooting in more recent years (due to Stephen Curry).
+This strong correlation (`r correlation`), reflecting the NBA’s strategic evolution and the growing importance of the three-point shot in the modern game.
+
+The box plot of PPG and the amount of MVPs a player has demonstrates that MVP players do not necessarily tend to have higher PPG, indicating a weak relationship between higher points per game and MVPs.This is further proven by the correlation between PPG and MVP Count (`r round (cor(mvp_counted$PPG, mvp_counted$MVPCount), 2)`).
+
+# Reproducibility
+
+I added comments throughout the code to clearly demonstrate what is happening in the program.
+Further, I did not use any code to set the working directory, ensuring that the code may be run on any computer.
+
+# Choice Elements
+
+In this report, I included several choice elements.
+I merged three datasets, two with NBA player statistics and another with MVP data, using the player name as a key.
+I created two new variables: GOOD_SHOOTER, which categorizes players based on their high shooting statistics (FG%, 3P%, FT%), and MVP, which marks whether a player won the MVP award in a given season.
+I formatted the season.y variable to ensure it was numeric for analysis.
+I used a loop to check each player’s MVP status across seasons and an if statement to assign “YES” or “NO” to the MVP column based on matching data.
+I used web scraping to find the MVP data, and used code to create the data set.
+I used many if else statements, such as when I counted the amount of MVPs a player won, or when determined if a player had a 50-40-90 season (GOOD_SHOOTER).
+
+# Conclusion
+
+The results of this anaylsis were largely consistent with expectations, that MVP is a difficult award to win and cannot be correlated to only one statistic.
+I also found that much of the NBA is experiencing change, whether it be in 3 pointers made, or in where the best players are playing.
+I was surprised to find that many of the correlations I expected to be strong were rather weak.
+PPG and MVP, for example, shocked me.
+However, it is not all that surprising when thought about logically, for many players score many points on teams with no chance of winning, making them poor contenders for MVP.
+Most others did meet my expecations, especially looking at 3PM over time for the players, as this fits the new age of basketball being played.
+
+# References
+
+Adande, J.A.
+“#nbarank: Memorable Photos in NBA History.” ESPN, 2017.
+<https://www.espn.com/nba/story/_/page/nbarank-bestimages-19414246/nbarank-ranking-best-nba-images-all>.
+
+Alden, Nick.
+“NBA Top Scorers (2000-2024).” Kaggle, August 22, 2024.
+<https://www.kaggle.com/datasets/nickalden/nba-top-scorers-stats-and-shot-details-2000-2024?resource=download>.
+
+“NBA MVP & ABA Most Valuable Player Award Winners.” Basketball.
+Accessed November 15, 2024.
+<https://www.basketball-reference.com/awards/mvp.html>.
+
+Sunderhaft, Robert.
+“1982-2022 NBA Player Statistics with MVP Votes.” Kaggle, July 13, 2022.
+<https://www.kaggle.com/datasets/robertsunderhaft/nba-player-season-statistics-with-mvp-win-share>.
